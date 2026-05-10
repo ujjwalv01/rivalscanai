@@ -6,7 +6,7 @@ export const groq = new OpenAI({
   baseURL: 'https://api.groq.com/openai/v1'
 });
 
-export const SYSTEM_PROMPT = `You are a senior competitive intelligence analyst. Be specific, data-driven, and avoid vague platitudes. Every insight must be grounded in the provided content or clearly marked as inferred. Use concrete numbers, metrics, and specific product/feature names when available.`;
+export const SYSTEM_PROMPT = `You are a senior competitive intelligence analyst. Always return your analysis in valid JSON format. Be specific, data-driven, and avoid vague platitudes. If scraping data is limited, use your expert market knowledge to provide a high-quality inference.`;
 
 export function buildUserPrompt(company: string, chunks: string): string {
   return `${SYSTEM_PROMPT}
@@ -16,31 +16,35 @@ Analyze this company: ${company}
 Scraped content:
 ${chunks}
 
-Return a single JSON object (no markdown, no explanation, no code fences) with exactly this schema:
+Return a JSON object with exactly this schema:
 {
-  "isValid": "boolean - true if the company is a real, known entity with verifiable business operations, false if it appears to be gibberish, non-existent, or completely unknown",
+  "isValid": "boolean",
   "overview": {
-    "oneliner": "string - one sharp sentence describing what the company does",
-    "positioning": "string - 2-3 sentence paragraph about market positioning",
-    "founded": "string - founding year or 'Unknown'",
-    "hq": "string - headquarters location or 'Unknown'",
-    "employees": "string - employee count range or 'Unknown'",
-    "stage": "string - e.g. 'Series B', 'Public', 'Bootstrapped', 'Unknown'",
-    "tags": ["array", "of", "3-5", "industry/model tags"]
+    "oneliner": "string",
+    "positioning": "string",
+    "founded": "string",
+    "hq": "string",
+    "employees": "string",
+    "stage": "string",
+    "revenue": "string",
+    "businessModel": "string",
+    "techStack": ["array"],
+    "targetAudience": "string",
+    "tags": ["array"]
   },
   "swot": {
-    "strengths": ["array of 4-5 specific strengths"],
-    "weaknesses": ["array of 3-4 specific weaknesses"],
-    "opportunities": ["array of 3-4 specific opportunities"],
-    "threats": ["array of 3-4 specific threats"]
+    "strengths": ["array"],
+    "weaknesses": ["array"],
+    "opportunities": ["array"],
+    "threats": ["array"]
   },
   "competitors": [
     {
       "name": "string",
-      "positioning": "string - brief positioning statement",
-      "strengths": "string - key advantage",
-      "pricing": "string - pricing model description",
-      "target": "string - primary target market"
+      "positioning": "string",
+      "strengths": "string",
+      "pricing": "string",
+      "target": "string"
     }
   ],
   "scores": {
@@ -55,17 +59,14 @@ Return a single JSON object (no markdown, no explanation, no code fences) with e
     {
       "headline": "string",
       "source": "string",
-      "date": "string - YYYY-MM-DD format or approximate",
-      "summary": "string - one sentence summary",
+      "date": "string",
+      "summary": "string",
       "sentiment": "positive | neutral | negative"
     }
   ]
 }
 
-If isValid is false, you should still attempt to fill other fields with "Unknown" or empty arrays/zeros, but the primary indicator of data quality is the isValid flag.
-
-Include exactly 4-5 competitors. Include exactly 5-6 news items. Scores are 1-10.
-CRITICAL: ONLY OUTPUT RAW JSON. DO NOT wrap the output in \`\`\`json\`\`\`. The first character of your response MUST be '{'.`;
+Ensure you provide 3-4 competitors and 4-5 news items.`;
 }
 
 export function chunkText(text: string, maxTokens = 1500): string[] {

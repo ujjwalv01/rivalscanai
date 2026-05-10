@@ -6,6 +6,10 @@ export interface CompanyOverview {
   employees: string;
   stage: string;
   tags: string[];
+  revenue?: string;
+  businessModel?: string;
+  techStack?: string[];
+  targetAudience?: string;
 }
 
 export interface SwotAnalysis {

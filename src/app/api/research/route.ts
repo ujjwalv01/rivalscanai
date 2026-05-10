@@ -14,32 +14,60 @@ async function scrapeCompany(company: string): Promise<{ text: string; error?: s
     const { Firecrawl } = await import('@mendable/firecrawl-js');
     const app = new Firecrawl({ apiKey });
 
-    // Determine base URL
-    let baseUrl = company;
+    // 1. URL Discovery Phase
+    let baseUrl = company.trim();
     if (!baseUrl.startsWith('http')) {
-      const slug = company.toLowerCase().replace(/\s+/g, '');
-      baseUrl = `https://www.${slug}.com`;
-    }
-
-    const paths = ['', '/about', '/pricing', '/blog'];
-    
-    const scrapeResults = await Promise.all(
-      paths.map(async (path) => {
+      if (baseUrl.includes('.') && !baseUrl.includes(' ')) {
+        baseUrl = `https://${baseUrl}`;
+      } else {
         try {
-          const url = baseUrl + path;
-          // @ts-expect-error - firecrawl types may vary
-          const result = await app.scrapeUrl(url, { formats: ['markdown'] });
-          if (result && result.success && result.markdown) {
-            return `\n\n--- Page: ${url} ---\n${result.markdown}`;
+          // Use search to find the actual website for the company
+          const searchResult = await app.search(company, { limit: 1 }) as any;
+          if (searchResult && searchResult.data && searchResult.data.length > 0) {
+            baseUrl = searchResult.data[0].url;
+          } else {
+            // Fallback to guess
+            const slug = baseUrl.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '');
+            baseUrl = `https://${slug}.com`;
           }
         } catch {
-          // Ignore individual failures
+          const slug = baseUrl.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '');
+          baseUrl = `https://${slug}.com`;
         }
-        return null;
-      })
+      }
+    }
+
+    const paths = [''];
+    
+    // Create a timeout promise
+    const timeoutPromise = new Promise<null>((_, reject) => 
+      setTimeout(() => reject(new Error('Scraping timeout')), 7000)
     );
 
-    const results = scrapeResults.filter((r): r is string => r !== null);
+    // 2. Scraping Phase
+    const scrapeResults = await Promise.race([
+      Promise.all(
+        paths.map(async (path) => {
+          try {
+            // Ensure path starts with / if not empty
+            const url = path ? (baseUrl.endsWith('/') ? baseUrl + path.slice(1) : baseUrl + path) : baseUrl;
+            const result = await app.scrapeUrl(url, { formats: ['markdown'] });
+            if (result && result.success && result.markdown) {
+              return `\n\n--- Page: ${url} ---\n${result.markdown}`;
+            }
+          } catch {
+            // Ignore individual failures
+          }
+          return null;
+        })
+      ),
+      timeoutPromise
+    ]).catch((err) => {
+      console.warn('Scraping warning:', err.message);
+      return [];
+    });
+
+    const results = (scrapeResults || []).filter((r): r is string => r !== null);
 
     if (results.length === 0) {
       return { text: '', error: `Could not scrape any pages for ${company}` };
@@ -72,6 +100,7 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      sendEvent(controller, { status: 'scraping', message: 'Connecting to intelligence grid...' });
       try {
         // 1. Check cache
         const cached = await getCached<ResearchReport>(cacheKey);
@@ -86,7 +115,7 @@ export async function POST(req: NextRequest) {
         }
 
         // 2. Scrape
-        sendEvent(controller, { status: 'scraping', message: 'Scraping website...' });
+        sendEvent(controller, { status: 'scraping', message: 'Discovering company footprint...' });
         const { text: scrapedText, error: scrapeError } = await scrapeCompany(company);
 
         sendEvent(controller, { status: 'reading', message: 'Reading content...' });
