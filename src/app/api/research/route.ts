@@ -1,18 +1,49 @@
-import { NextRequest } from 'next/server';
-import { getCached, setCache } from '@/lib/redis';
-import { ResearchReport, StreamMessage } from '@/lib/types';
-import { buildUserPrompt, chunkText } from '@/lib/groq';
+import { NextRequest, NextResponse } from 'next/server';
+import Groq from 'groq-sdk';
+import { ResearchReport, ResearchStatus } from '@/lib/types';
+import { buildUserPrompt } from '@/lib/groq';
+
+// 1. Define strict types for Firecrawl to satisfy production ESLint rules
+interface FirecrawlSearchResponse {
+  success: boolean;
+  data: Array<{ url: string }>;
+}
+
+interface FirecrawlScrapeResponse {
+  success: boolean;
+  markdown?: string;
+}
+
+interface FirecrawlApp {
+  search(query: string, options?: { limit?: number }): Promise<FirecrawlSearchResponse>;
+  scrapeUrl(url: string, options?: { formats?: string[] }): Promise<FirecrawlScrapeResponse>;
+}
+
+// 2. State management for reports (in-memory cache)
+const reportCache = new Map<string, { data: ResearchReport; timestamp: number }>();
+
+async function getCached<T>(key: string): Promise<T | null> {
+  const cached = reportCache.get(key);
+  if (cached && Date.now() - cached.timestamp < 1000 * 60 * 60 * 24) {
+    return cached.data as unknown as T;
+  }
+  return null;
+}
+
+async function setCache(key: string, data: ResearchReport) {
+  reportCache.set(key, { data, timestamp: Date.now() });
+}
 
 async function scrapeCompany(company: string): Promise<{ text: string; error?: string }> {
   const apiKey = process.env.FIRECRAWL_API_KEY;
-
-  if (!apiKey || apiKey === 'your_firecrawl_api_key_here') {
+  if (!apiKey) {
     return { text: '', error: 'Firecrawl API key not configured' };
   }
 
   try {
     const { Firecrawl } = await import('@mendable/firecrawl-js');
-    const app = new Firecrawl({ apiKey });
+    // Cast to our defined interface to avoid 'any' or 'Function' errors
+    const app = new Firecrawl({ apiKey }) as unknown as FirecrawlApp;
 
     // 1. URL Discovery Phase
     let baseUrl = company.trim();
@@ -22,7 +53,7 @@ async function scrapeCompany(company: string): Promise<{ text: string; error?: s
       } else {
         try {
           // Use search to find the actual website for the company
-          const searchResult = await app.search(company, { limit: 1 }) as { data?: { url: string }[] };
+          const searchResult = await app.search(company, { limit: 1 });
           if (searchResult && searchResult.data && searchResult.data.length > 0) {
             baseUrl = searchResult.data[0].url;
           } else {
@@ -51,7 +82,7 @@ async function scrapeCompany(company: string): Promise<{ text: string; error?: s
           try {
             // Ensure path starts with / if not empty
             const url = path ? (baseUrl.endsWith('/') ? baseUrl + path.slice(1) : baseUrl + path) : baseUrl;
-            const result = await (app as unknown as { scrapeUrl: Function }).scrapeUrl(url, { formats: ['markdown'] });
+            const result = await app.scrapeUrl(url, { formats: ['markdown'] });
             if (result && result.success && result.markdown) {
               return `\n\n--- Page: ${url} ---\n${result.markdown}`;
             }
@@ -73,30 +104,29 @@ async function scrapeCompany(company: string): Promise<{ text: string; error?: s
       return { text: '', error: `Could not scrape any pages for ${company}` };
     }
 
-    return { text: results.join('\n'), error: undefined };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown scraping error';
-    return { text: '', error: message };
+    return { text: results.join('\n\n') };
+  } catch (error) {
+    return { text: '', error: (error as Error).message };
   }
 }
 
-function sendEvent(controller: ReadableStreamDefaultController, message: StreamMessage) {
-  const encoder = new TextEncoder();
-  controller.enqueue(encoder.encode(`data: ${JSON.stringify(message)}\n\n`));
+function sendEvent(controller: ReadableStreamDefaultController, event: { status: ResearchStatus; message: string; data?: ResearchReport; error?: string }) {
+  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => ({}));
-  const { company } = body;
+  const { company } = await req.json();
 
-  if (!company || typeof company !== 'string') {
-    return new Response(JSON.stringify({ error: 'Company name is required' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
+  if (!company) {
+    return NextResponse.json({ error: 'Company name is required' }, { status: 400 });
   }
 
-  const cacheKey = `rivalscan:${company.toLowerCase().trim()}`;
+  const groqKey = process.env.GROQ_API_KEY;
+  if (!groqKey) {
+    return NextResponse.json({ error: 'Groq API key not configured' }, { status: 500 });
+  }
+
+  const cacheKey = `report_${company.toLowerCase().replace(/\s+/g, '_')}`;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -119,75 +149,48 @@ export async function POST(req: NextRequest) {
         const { text: scrapedText, error: scrapeError } = await scrapeCompany(company);
 
         sendEvent(controller, { status: 'reading', message: 'Reading content...' });
-
-        // 3. Prepare content for Claude
-        let contentForClaude: string;
-        if (scrapeError || !scrapedText) {
-          contentForClaude = `Company name: ${company}\n[Note: Web scraping was unavailable. Please rely on your training knowledge and any web search capabilities to analyze this company thoroughly.]`;
-        } else {
-          const chunks = chunkText(scrapedText, 1500);
-          contentForClaude = chunks.slice(0, 8).join('\n\n---CHUNK---\n\n');
-        }
-
-        // 4. Generate with Groq
+        
+        // 3. AI Analysis
         sendEvent(controller, { status: 'generating', message: 'Generating report...' });
-
-        const { groq: groqClient } = await import('@/lib/groq');
+        
+        const groqClient = new Groq({ apiKey: groqKey });
         const completion = await groqClient.chat.completions.create({
           model: 'llama-3.3-70b-versatile',
           messages: [
-            { role: 'user', content: buildUserPrompt(company, contentForClaude) },
+            { role: 'user', content: buildUserPrompt(company, scrapedText) },
           ],
           response_format: { type: 'json_object' },
         });
 
-        let reportJson = completion.choices[0].message.content || '';
+        const reportJson = completion.choices[0].message.content || '';
+        const reportData = JSON.parse(reportJson) as ResearchReport;
 
-        // Strip markdown fences if present
-        reportJson = reportJson
-          .replace(/^```(?:json)?\n?/m, '')
-          .replace(/\n?```$/m, '')
-          .trim();
+        // Save to cache
+        await setCache(cacheKey, reportData);
 
-        const report: ResearchReport = JSON.parse(reportJson);
-
-        // 6. Cache result
-        await setCache(cacheKey, report, 86400);
-
-        // 7. Send done
         sendEvent(controller, {
           status: 'done',
           message: 'Report generated successfully',
-          data: report,
-          ...(scrapeError
-            ? { error: `Note: Scraping was unavailable (${scrapeError}). Analysis used web knowledge as fallback.` }
-            : {}),
+          data: reportData,
         });
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-        const isGroqError = errorMessage.toLowerCase().includes('groq') || 
-                           errorMessage.toLowerCase().includes('401') ||
-                           errorMessage.toLowerCase().includes('unauthorized');
-        
+
+        controller.close();
+      } catch (error) {
+        console.error('Research error:', error);
         sendEvent(controller, {
           status: 'error',
-          message: isGroqError ? 'API Configuration Error' : 'Analysis Failed',
-          error: isGroqError 
-            ? `API Key Error: ${errorMessage}. Please check your GROQ_API_KEY in Vercel environment variables.` 
-            : errorMessage,
+          message: (error as Error).message || 'Analysis failed',
         });
-      } finally {
         controller.close();
       }
     },
   });
 
-  return new Response(stream, {
+  return new NextResponse(stream, {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
+      'Connection': 'keep-alive',
     },
   });
 }
