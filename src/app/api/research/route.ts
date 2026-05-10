@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Groq from 'groq-sdk';
 import { ResearchReport, ResearchStatus } from '@/lib/types';
-import { buildUserPrompt } from '@/lib/groq';
+import { groq, buildUserPrompt } from '@/lib/groq';
 
 // 1. Define strict types for Firecrawl to satisfy production ESLint rules
 interface FirecrawlSearchResponse {
@@ -121,11 +120,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Company name is required' }, { status: 400 });
   }
 
-  const groqKey = process.env.GROQ_API_KEY;
-  if (!groqKey) {
-    return NextResponse.json({ error: 'Groq API key not configured' }, { status: 500 });
-  }
-
   const cacheKey = `report_${company.toLowerCase().replace(/\s+/g, '_')}`;
 
   const stream = new ReadableStream({
@@ -153,8 +147,7 @@ export async function POST(req: NextRequest) {
         // 3. AI Analysis
         sendEvent(controller, { status: 'generating', message: 'Generating report...' });
         
-        const groqClient = new Groq({ apiKey: groqKey });
-        const completion = await groqClient.chat.completions.create({
+        const completion = await groq.chat.completions.create({
           model: 'llama-3.3-70b-versatile',
           messages: [
             { role: 'user', content: buildUserPrompt(company, scrapedText) },
