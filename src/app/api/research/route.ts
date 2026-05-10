@@ -140,7 +140,7 @@ export async function POST(req: NextRequest) {
 
         // 2. Scrape
         sendEvent(controller, { status: 'scraping', message: 'Discovering company footprint...' });
-        const { text: scrapedText, error: scrapeError } = await scrapeCompany(company);
+        const { text: scrapedText } = await scrapeCompany(company);
 
         sendEvent(controller, { status: 'reading', message: 'Reading content...' });
         
