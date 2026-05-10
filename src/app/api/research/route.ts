@@ -22,7 +22,7 @@ async function scrapeCompany(company: string): Promise<{ text: string; error?: s
       } else {
         try {
           // Use search to find the actual website for the company
-          const searchResult = await app.search(company, { limit: 1 }) as any;
+          const searchResult = await app.search(company, { limit: 1 }) as { data?: { url: string }[] };
           if (searchResult && searchResult.data && searchResult.data.length > 0) {
             baseUrl = searchResult.data[0].url;
           } else {
