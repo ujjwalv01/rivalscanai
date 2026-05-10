@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { useTheme } from 'next-themes';
-import { Moon, Sun, Zap } from 'lucide-react';
+import { Moon, Sun } from 'lucide-react';
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { useEffect, useState } from 'react';
 import { motion, useScroll, useTransform } from 'framer-motion';
@@ -31,8 +32,8 @@ export function Navbar() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <Link href="/" className="flex items-center gap-3 font-bold text-xl tracking-tighter uppercase transition-opacity hover:opacity-80">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center transition-transform hover:scale-105 shadow-lg shadow-blue-500/20">
-                <Zap className="w-5 h-5 text-white" />
+              <div className="flex items-center justify-center transition-transform hover:scale-105">
+                <Image src="/logo.png" alt="RivalScan Logo" width={36} height={36} className="rounded-xl object-contain" />
               </div>
               <span className="text-neutral-50">
                 RivalScan

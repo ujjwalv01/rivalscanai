@@ -16,6 +16,10 @@ export const metadata: Metadata = {
     description: 'Research any company and generate structured competitive intelligence reports instantly.',
     type: 'website',
   },
+  icons: {
+    icon: '/logo.png',
+    apple: '/logo.png',
+  },
 };
 
 export default function RootLayout({
