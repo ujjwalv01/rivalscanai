@@ -51,7 +51,7 @@ async function scrapeCompany(company: string): Promise<{ text: string; error?: s
           try {
             // Ensure path starts with / if not empty
             const url = path ? (baseUrl.endsWith('/') ? baseUrl + path.slice(1) : baseUrl + path) : baseUrl;
-            const result = await app.scrapeUrl(url, { formats: ['markdown'] });
+            const result = await (app as unknown as { scrapeUrl: Function }).scrapeUrl(url, { formats: ['markdown'] });
             if (result && result.success && result.markdown) {
               return `\n\n--- Page: ${url} ---\n${result.markdown}`;
             }
